@@ -2,201 +2,186 @@
 
 // NowIstay client.
 //
-// NowIstay exposes its host data through a remote MCP server
-// (Streamable HTTP + OAuth) at https://api.nowistay.com/mcp. This module is a
-// tiny JSON-RPC client for that endpoint: it opens an MCP session, calls tools
-// such as get_calendar_ari and create_booking_preview/confirm, and returns the
-// parsed JSON results. Every write in NowIstay is a two-step "preview" then
-// "confirm" with a one-time approval token; the helpers below do both steps.
+// Uses the NowIstay public REST API (https://api.nowistay.com/public/docs)
+// with a personal API credential that the host creates in the NowIstay app
+// (My account > Developer > New credential). The credential is exchanged for a
+// one-hour access token with the OAuth client_credentials grant; the client
+// renews it automatically, so there is no token to copy or babysit.
+//
+// Required credential permissions: properties.read, calendar.read,
+// bookings.read, bookings.write.
+//
+// The rest of the app works with the shapes returned here (calendar days in
+// snake_case, bookings flattened), so the mock below can stand in for it.
 //
 // Set NOWISTAY_MOCK=true to run against an in-memory fake (local development
 // and tests), so nothing touches the live calendar.
 
-const PROTOCOL_VERSION = '2025-06-18';
-
 class NowIstayError extends Error {
-  constructor(message, details) {
+  constructor(message, details, status) {
     super(message);
     this.name = 'NowIstayError';
     this.details = details;
+    this.status = status;
   }
 }
 
 // ---------------------------------------------------------------------------
-// Live MCP client
+// Live REST client
 // ---------------------------------------------------------------------------
 
-class McpNowIstayClient {
+class RestNowIstayClient {
   constructor(cfg) {
     this.cfg = cfg;
-    this.accessToken = cfg.accessToken;
-    this.sessionId = null;
-    this.initializing = null;
-    this.nextId = 1;
+    this.baseUrl = cfg.apiUrl.replace(/\/$/, '');
+    this.token = null;
+    this.tokenExpiresAt = 0;
+    this.tokenPromise = null;
   }
 
-  async post(body, { allowRetry = true } = {}) {
-    const headers = {
-      'Content-Type': 'application/json',
-      Accept: 'application/json, text/event-stream',
-      'MCP-Protocol-Version': PROTOCOL_VERSION,
-    };
-    if (this.accessToken) headers.Authorization = `Bearer ${this.accessToken}`;
-    if (this.sessionId) headers['Mcp-Session-Id'] = this.sessionId;
-
-    const res = await fetch(this.cfg.mcpUrl, { method: 'POST', headers, body: JSON.stringify(body) });
-
-    if (res.status === 401 && allowRetry && (await this.refreshAccessToken())) {
-      return this.post(body, { allowRetry: false });
-    }
-    if (res.status === 404 && this.sessionId && allowRetry && body.method !== 'initialize') {
-      // Session expired on the server: open a new one and retry once.
-      this.sessionId = null;
-      await this.ensureSession();
-      return this.post(body, { allowRetry: false });
-    }
-    if (!res.ok && res.status !== 202) {
-      const text = await res.text().catch(() => '');
-      throw new NowIstayError(`NowIstay MCP HTTP ${res.status}`, text.slice(0, 500));
-    }
-
-    const sid = res.headers.get('mcp-session-id');
-    if (sid) this.sessionId = sid;
-    if (res.status === 202 || body.id === undefined) return null; // notification
-
-    const type = res.headers.get('content-type') || '';
-    const raw = await res.text();
-    let message;
-    if (type.includes('text/event-stream')) {
-      // Find the JSON-RPC response with our id among the SSE events.
-      for (const line of raw.split(/\r?\n/)) {
-        if (!line.startsWith('data:')) continue;
-        try {
-          const parsed = JSON.parse(line.slice(5).trim());
-          if (parsed && parsed.id === body.id) message = parsed;
-        } catch (_) { /* ignore keep-alives */ }
-      }
-    } else {
-      message = JSON.parse(raw);
-    }
-    if (!message) throw new NowIstayError('Empty response from NowIstay MCP');
-    if (message.error) throw new NowIstayError(message.error.message || 'NowIstay MCP error', message.error);
-    return message.result;
-  }
-
-  async refreshAccessToken() {
-    const { refreshToken, tokenUrl, clientId, clientSecret } = this.cfg;
-    if (!refreshToken || !tokenUrl) return false;
-    const form = new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken });
-    if (clientId) form.set('client_id', clientId);
-    if (clientSecret) form.set('client_secret', clientSecret);
-    const res = await fetch(tokenUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: form,
-    });
-    if (!res.ok) return false;
-    const json = await res.json();
-    if (!json.access_token) return false;
-    this.accessToken = json.access_token;
-    if (json.refresh_token) this.cfg.refreshToken = json.refresh_token;
-    this.sessionId = null;
-    return true;
-  }
-
-  async ensureSession() {
-    if (this.sessionId) return;
-    if (!this.initializing) {
-      this.initializing = (async () => {
-        await this.post({
-          jsonrpc: '2.0',
-          id: this.nextId++,
-          method: 'initialize',
-          params: {
-            protocolVersion: PROTOCOL_VERSION,
-            capabilities: {},
-            clientInfo: { name: 'luxcasa-booking-site', version: '1.0.0' },
-          },
+  async accessToken(force = false) {
+    if (!force && this.token && Date.now() < this.tokenExpiresAt - 60 * 1000) return this.token;
+    if (!this.tokenPromise) {
+      this.tokenPromise = (async () => {
+        if (!this.cfg.clientId || !this.cfg.clientSecret) {
+          throw new NowIstayError('NOWISTAY_CLIENT_ID and NOWISTAY_CLIENT_SECRET are not set');
+        }
+        const res = await fetch(`${this.baseUrl}/public/oauth/token`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            grant_type: 'client_credentials',
+            client_id: this.cfg.clientId,
+            client_secret: this.cfg.clientSecret,
+          }),
         });
-        await this.post({ jsonrpc: '2.0', method: 'notifications/initialized' });
-      })().finally(() => { this.initializing = null; });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || !json.access_token) {
+          throw new NowIstayError(`NowIstay token request failed (HTTP ${res.status})`, json, res.status);
+        }
+        this.token = json.access_token;
+        this.tokenExpiresAt = Date.now() + (Number(json.expires_in) || 3600) * 1000;
+        return this.token;
+      })().finally(() => { this.tokenPromise = null; });
     }
-    await this.initializing;
+    return this.tokenPromise;
   }
 
-  async callTool(name, args) {
-    await this.ensureSession();
-    const result = await this.post({
-      jsonrpc: '2.0',
-      id: this.nextId++,
-      method: 'tools/call',
-      params: { name, arguments: args },
+  async request(method, path, { query, body } = {}, retried = false) {
+    const url = new URL(this.baseUrl + path);
+    if (query) for (const [k, v] of Object.entries(query)) if (v !== undefined) url.searchParams.set(k, v);
+    const token = await this.accessToken(retried);
+    const res = await fetch(url, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/json',
+        ...(body ? { 'Content-Type': 'application/json' } : {}),
+      },
+      body: body ? JSON.stringify(stripUndefined(body)) : undefined,
     });
-    const parsed = parseToolResult(result);
-    if (result && result.isError) {
-      throw new NowIstayError(`NowIstay ${name} failed`, parsed);
-    }
-    return parsed;
+    if (res.status === 401 && !retried) return this.request(method, path, { query, body }, true);
+    const text = await res.text();
+    let json = null;
+    try { json = text ? JSON.parse(text) : null; } catch (_) { json = { text }; }
+    if (!res.ok) throw new NowIstayError(`NowIstay ${method} ${path} failed (HTTP ${res.status})`, json, res.status);
+    return json;
   }
 
-  getProperty(propertyId) {
-    return this.callTool('get_property', { property_id: propertyId }).then((r) => r.property || r);
+  async getProperty(propertyId) {
+    const p = await this.request('GET', `/public/v1/properties/${propertyId}`);
+    return p.property || p;
   }
 
-  getCalendar(propertyId, startDate, endDate) {
-    return this.callTool('get_calendar_ari', { property_id: propertyId, start_date: startDate, end_date: endDate });
+  async getCalendar(propertyId, startDate, endDate) {
+    const res = await this.request('GET', `/public/v1/properties/${propertyId}/calendar`, {
+      query: { from: startDate, to: endDate },
+    });
+    return {
+      property_id: res.propertyId,
+      currency: res.currency,
+      days: (res.days || []).map((d) => ({
+        date: d.date,
+        availability: d.availability,
+        rate: d.rate,
+        min_stay: d.minStay,
+        max_stay: d.maxStay,
+        stop_sell: !!d.stopSell,
+        closed_to_arrival: !!d.closedToArrival,
+        closed_to_departure: !!d.closedToDeparture,
+      })),
+    };
   }
 
-  getBooking(bookingId) {
-    return this.callTool('get_booking', { booking_id: bookingId, include_guest_contact_details: true })
-      .then((r) => r.booking || r);
+  async getBooking(bookingId) {
+    const b = await this.request('GET', `/public/v1/bookings/${bookingId}`);
+    return flattenBooking(b.booking || b);
   }
 
   async createBooking(args) {
-    const preview = await this.callTool('create_booking_preview', args);
-    const token = findApprovalToken(preview);
-    if (!token) throw new NowIstayError('NowIstay did not return an approval token', preview);
-    const confirmed = await this.callTool('create_booking_confirm', { approval_token: token });
-    return { id: findBookingId(confirmed), raw: confirmed };
+    const res = await this.request('POST', '/public/v1/bookings', {
+      body: {
+        propertyId: args.property_id,
+        arrival: args.arrival,
+        departure: args.departure,
+        status: args.status,
+        guestFirstName: args.guest_first_name,
+        guestLastName: args.guest_last_name,
+        guestName: args.guest_name,
+        guestEmail: args.guest_email,
+        guestPhone: args.guest_phone,
+        adults: args.num_adults,
+        children: args.num_children,
+        amount: args.amount,
+        nightRate: args.night_rate,
+        cleaningAmount: args.cleaning_amount,
+        currency: args.currency,
+        notes: args.notes,
+        silent: args.silent,
+      },
+    });
+    const booking = (res && res.booking) || res || {};
+    return { id: booking.id || (res && (res.id || res.bookingId)), raw: res };
   }
 
   async updateBooking(args) {
-    const preview = await this.callTool('update_booking_preview', args);
-    const token = findApprovalToken(preview);
-    if (!token) throw new NowIstayError('NowIstay did not return an approval token', preview);
-    return this.callTool('update_booking_confirm', { approval_token: token });
+    const { booking_id: id, ...rest } = args;
+    const res = await this.request('PATCH', `/public/v1/bookings/${id}`, {
+      body: {
+        status: rest.status,
+        notes: rest.notes,
+        silent: rest.silent,
+        cancellationRefundMode: rest.cancellation_refund_mode,
+      },
+    });
+    return flattenBooking(res.booking || res);
   }
 }
 
-function parseToolResult(result) {
-  if (!result) return null;
-  if (result.structuredContent) return result.structuredContent;
-  const text = (result.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('');
-  try { return JSON.parse(text); } catch (_) { return { text }; }
+function flattenBooking(b) {
+  if (!b) return b;
+  const guest = b.guest || {};
+  const amounts = b.amounts || {};
+  return {
+    id: b.id,
+    propertyId: b.propertyId,
+    status: b.status,
+    channel: b.channel,
+    directBooking: b.directBooking,
+    arrival: b.arrival,
+    departure: b.departure,
+    guestName: guest.fullName || [guest.firstName, guest.lastName].filter(Boolean).join(' '),
+    guestEmail: guest.email,
+    guestPhone: guest.phone,
+    numAdults: b.adults,
+    numChildren: b.children,
+    amount: amounts.amount != null ? Number(amounts.amount) : null,
+    currency: amounts.currency,
+  };
 }
 
-function findApprovalToken(obj) {
-  if (!obj || typeof obj !== 'object') return null;
-  if (typeof obj.approval_token === 'string') return obj.approval_token;
-  if (typeof obj.approvalToken === 'string') return obj.approvalToken;
-  for (const v of Object.values(obj)) {
-    const t = typeof v === 'object' ? findApprovalToken(v) : null;
-    if (t) return t;
-  }
-  return null;
-}
-
-function findBookingId(obj) {
-  if (!obj || typeof obj !== 'object') return null;
-  if (obj.booking && obj.booking.id) return obj.booking.id;
-  if (obj.booking_id) return obj.booking_id;
-  if (obj.bookingId) return obj.bookingId;
-  if (obj.id) return obj.id;
-  for (const v of Object.values(obj)) {
-    const id = typeof v === 'object' ? findBookingId(v) : null;
-    if (id) return id;
-  }
-  return null;
+function stripUndefined(obj) {
+  return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined));
 }
 
 // ---------------------------------------------------------------------------
@@ -296,10 +281,10 @@ function addDays(isoDate, n) {
 
 function createNowIstayClient(cfg) {
   if (cfg.mock) return new MockNowIstayClient(cfg);
-  if (!cfg.accessToken && !cfg.refreshToken) {
-    console.warn('[nowistay] No NOWISTAY_ACCESS_TOKEN set. Calls to NowIstay will fail. Use NOWISTAY_MOCK=true for local development.');
+  if (!cfg.clientId || !cfg.clientSecret) {
+    console.warn('[nowistay] NOWISTAY_CLIENT_ID / NOWISTAY_CLIENT_SECRET are not set. Calls to NowIstay will fail. Use NOWISTAY_MOCK=true for local development.');
   }
-  return new McpNowIstayClient(cfg);
+  return new RestNowIstayClient(cfg);
 }
 
 module.exports = {
@@ -307,8 +292,6 @@ module.exports = {
   NowIstayError,
   addDays,
   // exported for tests
-  parseToolResult,
-  findApprovalToken,
-  findBookingId,
+  RestNowIstayClient,
   MockNowIstayClient,
 };

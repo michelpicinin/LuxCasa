@@ -370,7 +370,7 @@ function createApp({ config, nowistay, stripe }) {
     if (err instanceof NowIstayError) {
       console.error('[nowistay]', err.message, JSON.stringify(err.details || '').slice(0, 500));
       const text = JSON.stringify(err.details || '').toLowerCase();
-      if (text.includes('already booked') || text.includes('not available') || text.includes('unavailable')) {
+      if (err.status === 409 || text.includes('already booked') || text.includes('not available') || text.includes('unavailable')) {
         return res.status(409).json({ error: 'Sorry, these dates were just booked. Please choose other dates.' });
       }
       return res.status(502).json({ error: 'Our booking system is unavailable right now. Please try again shortly.' });
