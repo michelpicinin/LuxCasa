@@ -1,0 +1,36 @@
+# Render Blueprint: https://render.com/docs/blueprint-spec
+# New > Blueprint in Render, pick this repo, then fill in the secret values.
+services:
+  - type: web
+    name: luxcasa
+    runtime: node
+    plan: starter
+    region: frankfurt
+    buildCommand: npm ci --omit=dev
+    startCommand: node server.js
+    healthCheckPath: /api/property
+    autoDeploy: true
+    domains:
+      - luxcasa.lu
+      - www.luxcasa.lu
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: PUBLIC_URL
+        value: https://luxcasa.lu
+      - key: NOWISTAY_PROPERTY_ID
+        value: "2553"
+      - key: NOWISTAY_ACCESS_TOKEN
+        sync: false
+      - key: NOWISTAY_REFRESH_TOKEN
+        sync: false
+      - key: NOWISTAY_TOKEN_URL
+        sync: false
+      - key: NOWISTAY_CLIENT_ID
+        sync: false
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: FREE_CANCELLATION_DAYS
+        value: "7"

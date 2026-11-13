@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Manage booking · LuxCasa</title>
+  <meta name="robots" content="noindex">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="top">
+    <a class="brand" href="/">LuxCasa</a>
+    <nav><a href="/#book">Book</a></nav>
+  </header>
+  <main>
+    <form class="card" id="lookup" novalidate>
+      <h1>Manage your booking</h1>
+      <p class="muted">Enter the booking number from your confirmation email and the email address you booked with.</p>
+      <label>Booking number<input name="bookingId" inputmode="numeric" required></label>
+      <label>Email<input type="email" name="email" autocomplete="email" required></label>
+      <p class="notice error" id="lookup-error" hidden></p>
+      <button class="primary" type="submit">Find my booking</button>
+    </form>
+
+    <section class="card" id="details" hidden></section>
+  </main>
+  <footer><p>LuxCasa · Bonnevoie, Luxembourg</p></footer>
+
+  <script>
+  (function () {
+    const $ = (s) => document.querySelector(s);
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const fmtDate = (d) => d ? new Date(d + 'T00:00:00Z').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }) : '';
+    const fmtMoney = (n, c) => n == null ? '' : new Intl.NumberFormat('en-GB', { style: 'currency', currency: c || 'EUR' }).format(n);
+    let creds = null;
+
+    async function post(path, body) {
+      const res = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || 'Something went wrong.');
+      return json;
+    }
+
+    function show(b) {
+      const el = $('#details');
+      el.innerHTML = `
+        <h2>Booking #${esc(b.bookingId)} <span class="status ${esc(b.status)}">${esc(b.status)}</span></h2>
+        <dl>
+          <dt>Guest</dt><dd>${esc(b.guestName)}</dd>
+          <dt>Check-in</dt><dd>${esc(fmtDate(b.arrival))} from ${esc(b.checkInTime)}</dd>
+          <dt>Check-out</dt><dd>${esc(fmtDate(b.departure))} by ${esc(b.checkOutTime)}</dd>
+          <dt>Guests</dt><dd>${esc((b.adults || 0) + (b.children || 0))}</dd>
+          ${b.amount ? `<dt>Total</dt><dd>${esc(fmtMoney(b.amount, b.currency))}</dd>` : ''}
+        </dl>
+        ${b.canCancelOnline
+          ? `<p class="small muted">You can cancel for a full refund up to ${esc(b.freeCancellationDays)} days before check-in.</p>
+             <button class="secondary" id="cancel">Cancel booking</button>`
+          : (b.status === 'cancelled' ? '' : `<p class="small muted">To change or cancel this booking, please reply to your confirmation email.</p>`)}
+        <p class="notice" id="msg" hidden></p>`;
+      el.hidden = false;
+      const btn = $('#cancel');
+      if (btn) btn.onclick = async () => {
+        if (btn.dataset.confirm !== '1') {
+          btn.dataset.confirm = '1';
+          btn.textContent = 'Click again to confirm cancellation';
+          return;
+        }
+        btn.disabled = true;
+        try {
+          const r = await post('/api/booking/cancel', creds);
+          const again = await post('/api/booking/lookup', creds);
+          show(again);
+          const m = $('#msg');
+          m.textContent = r.refunded ? 'Your booking is cancelled and a full refund is on its way to your card (5 to 10 days).' : 'Your booking is cancelled.';
+          m.hidden = false;
+        } catch (err) {
+          const m = $('#msg');
+          m.textContent = err.message; m.className = 'notice error'; m.hidden = false;
+          btn.disabled = false;
+        }
+      };
+    }
+
+    $('#lookup').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const f = e.target;
+      if (!f.reportValidity()) return;
+      const err = $('#lookup-error');
+      err.hidden = true;
+      creds = { bookingId: f.bookingId.value.replace(/\D/g, ''), email: f.email.value.trim() };
+      try {
+        show(await post('/api/booking/lookup', creds));
+      } catch (ex) {
+        err.textContent = ex.message; err.hidden = false;
+        $('#details').hidden = true;
+      }
+    });
+
+    const p = new URLSearchParams(location.search);
+    if (p.get('booking')) $('#lookup').bookingId.value = p.get('booking');
+  })();
+  </script>
+</body>
+</html>
