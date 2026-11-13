@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Booking received · LuxCasa</title>
+  <meta name="robots" content="noindex">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="top">
+    <a class="brand" href="/">LuxCasa</a>
+    <nav><a href="/manage">Manage booking</a></nav>
+  </header>
+  <main>
+    <section class="card" id="box">
+      <h1>Thank you!</h1>
+      <p class="muted">Loading your booking…</p>
+    </section>
+  </main>
+  <footer><p>LuxCasa · Luxembourg City</p></footer>
+  <script>
+  (async function () {
+    try { sessionStorage.removeItem('luxcasa_checkout'); } catch (_) {}
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const fmtDate = (d) => d ? new Date(d + 'T00:00:00Z').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }) : '';
+    const box = document.getElementById('box');
+    const id = new URLSearchParams(location.search).get('session_id');
+    try {
+      const res = await fetch('/api/checkout/session?session_id=' + encodeURIComponent(id || ''));
+      const s = await res.json();
+      if (!res.ok) throw new Error(s.error);
+      box.innerHTML = s.paid
+        ? `<h1>Your stay is booked</h1>
+           <p>Booking number <strong>#${esc(s.bookingId)}</strong></p>
+           <dl><dt>Check-in</dt><dd>${esc(fmtDate(s.arrival))}</dd><dt>Check-out</dt><dd>${esc(fmtDate(s.departure))}</dd>
+           <dt>Paid</dt><dd>${esc(new Intl.NumberFormat('en-GB', { style: 'currency', currency: s.currency || 'EUR' }).format(s.amount))}</dd></dl>
+           <p class="muted">A confirmation email is on its way to ${esc(s.email)}. Keep your booking number to <a href="/manage?booking=${esc(s.bookingId)}">manage your booking</a>.</p>`
+        : `<h1>Payment processing</h1><p class="muted">We have not received your payment confirmation yet. You will get an email as soon as it arrives.</p>`;
+    } catch (_) {
+      box.innerHTML = `<h1>Thank you!</h1><p class="muted">Your payment was received. Check your email for your confirmation.</p>`;
+    }
+  })();
+  </script>
+</body>
+</html>
