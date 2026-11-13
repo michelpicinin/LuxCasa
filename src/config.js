@@ -19,12 +19,9 @@ const config = {
 
   nowistay: {
     mock: bool(process.env.NOWISTAY_MOCK),
-    mcpUrl: process.env.NOWISTAY_MCP_URL || 'https://api.nowistay.com/mcp',
+    apiUrl: process.env.NOWISTAY_API_URL || 'https://api.nowistay.com',
     propertyId: int(process.env.NOWISTAY_PROPERTY_ID, 2553),
-    accessToken: process.env.NOWISTAY_ACCESS_TOKEN || '',
-    // Optional: lets the server refresh an expired OAuth access token on its own.
-    refreshToken: process.env.NOWISTAY_REFRESH_TOKEN || '',
-    tokenUrl: process.env.NOWISTAY_TOKEN_URL || '',
+    // Personal API credential created in NowIstay: My account > Developer > New credential.
     clientId: process.env.NOWISTAY_CLIENT_ID || '',
     clientSecret: process.env.NOWISTAY_CLIENT_SECRET || '',
   },

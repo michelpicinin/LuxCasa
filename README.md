@@ -9,7 +9,7 @@ Direct booking website for LuxCasa, a one-bedroom flat near the Old Town of Luxe
 
 ## How a booking works
 
-1. The guest picks dates. The browser shows prices from NowIstay's calendar (`get_calendar_ari`).
+1. The guest picks dates. The browser shows prices from NowIstay's calendar.
 2. On "Continue to secure payment" the server re-quotes from NowIstay (prices never come from the browser), creates a **pending** booking in NowIstay to hold the dates, and opens a Stripe Checkout session for the total.
 3. When Stripe reports the payment (`checkout.session.completed` webhook), the server sets the NowIstay booking to **confirmed**. NowIstay then emails the guest their confirmation.
 4. If the guest abandons payment, the hold is released right away when they return, or when the Stripe session expires (30 minutes).
@@ -23,7 +23,7 @@ Stay rules enforced from NowIstay: per-night availability, stop-sell, minimum an
 server.js            starts the app
 src/app.js           routes: calendar, quote, checkout, Stripe webhook, manage booking
 src/pricing.js       quote + stay-rule validation from NowIstay ARI data
-src/nowistay.js      NowIstay client (MCP over HTTP) + a mock for local dev
+src/nowistay.js      NowIstay public REST API client + a mock for local dev
 src/config.js        environment variables
 public/              the website (HTML, CSS, JS, photos in public/images)
 test/                node:test suite (runs against the mock, no network)
@@ -48,15 +48,20 @@ All secrets live in environment variables, never in the repo. See [.env.example]
 | --- | --- |
 | `PUBLIC_URL` | `https://luxcasa.lu` in production (Stripe return links, www redirect) |
 | `NOWISTAY_PROPERTY_ID` | `2553` |
-| `NOWISTAY_ACCESS_TOKEN` | OAuth access token for the NowIstay account |
-| `NOWISTAY_REFRESH_TOKEN`, `NOWISTAY_TOKEN_URL`, `NOWISTAY_CLIENT_ID`, `NOWISTAY_CLIENT_SECRET` | optional, lets the server renew the token by itself |
+| `NOWISTAY_CLIENT_ID`, `NOWISTAY_CLIENT_SECRET` | personal API credential you create in NowIstay (see below) |
 | `STRIPE_SECRET_KEY` | Stripe secret key (`sk_live_…`) |
 | `STRIPE_WEBHOOK_SECRET` | signing secret of the webhook endpoint (`whsec_…`) |
 | `FREE_CANCELLATION_DAYS` | online cancellation window, default `7` |
 
-### NowIstay access
+### NowIstay access (you create it yourself, nothing to request)
 
-NowIstay does not publish a REST API; it exposes its data through its hosted MCP server at `https://api.nowistay.com/mcp` with OAuth sign-in. The site calls the same tools the NowIstay assistant uses (`get_property`, `get_calendar_ari`, `create_booking_preview/confirm`, `update_booking_preview/confirm`, `get_booking`). It needs an OAuth token for the host account. Ask NowIstay support for an API/OAuth token for a server integration, or sign in once with an MCP client and copy the access + refresh token into the environment.
+The site uses the [NowIstay public REST API](https://api.nowistay.com/public/docs) with a **personal API credential** from your own account:
+
+1. In NowIstay open **My account → Developer** ([app.nowistay.com/hub/user/developer](https://app.nowistay.com/hub/user/developer)) and click **New credential**.
+2. Name it `luxcasa.lu website` and tick these permissions: `properties.read`, `calendar.read`, `bookings.read`, `bookings.write`.
+3. Click **Create credential** and copy the **Client ID** and **Client secret** (the secret is shown only once) into `NOWISTAY_CLIENT_ID` and `NOWISTAY_CLIENT_SECRET` on the host.
+
+The server exchanges the credential for a one-hour token and renews it on its own. If the secret ever leaks, use **Rotate secret** in the same page (the old one keeps working for 7 days).
 
 ## Deploy to luxcasa.lu
 

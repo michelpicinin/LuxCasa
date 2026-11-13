@@ -20,13 +20,9 @@ services:
         value: https://luxcasa.lu
       - key: NOWISTAY_PROPERTY_ID
         value: "2553"
-      - key: NOWISTAY_ACCESS_TOKEN
-        sync: false
-      - key: NOWISTAY_REFRESH_TOKEN
-        sync: false
-      - key: NOWISTAY_TOKEN_URL
-        sync: false
       - key: NOWISTAY_CLIENT_ID
+        sync: false
+      - key: NOWISTAY_CLIENT_SECRET
         sync: false
       - key: STRIPE_SECRET_KEY
         sync: false
