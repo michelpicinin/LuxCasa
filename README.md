@@ -1,6 +1,6 @@
 # LuxCasa
 
-Direct booking website for the LuxCasa apartment in Bonnevoie, Luxembourg City, served at **https://luxcasa.lu**.
+Direct booking website for LuxCasa, a one-bedroom flat near the Old Town of Luxembourg City, served at **https://luxcasa.lu**.
 
 - **Pricing and availability** come live from **NowIstay** (property `2553`). Change prices, minimum stays or block dates in NowIstay and the site follows within a minute.
 - **Bookings** are created in NowIstay as direct bookings, so they appear on the same calendar as Airbnb and Booking.com and block those channels automatically.
@@ -77,4 +77,5 @@ The site is a small Node server (it must keep the Stripe and NowIstay secrets pr
 
 ## Content
 
-The description and photo captions in `public/index.html` and `public/photos.js` are a first draft. Replace them with the wording from the Airbnb / Booking.com listings as needed. Photos are in `public/images/`.
+
+The page text comes from the Airbnb listing (rooms/48601427) and the Booking.com listing. Edit `public/index.html` to change it. Photos are in `public/images/`, captions in `public/photos.js`.
